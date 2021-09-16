@@ -2,11 +2,13 @@ import torch
 from torch import nn
 
 from typing import Callable, List
+from FedML.Base.config import GlobalConfig
+
 
 
 class Server:
     def __init__(self, get_model: Callable[[], nn.Module], options):
-        self.global_model = get_model()
+        self.global_model = get_model().to(GlobalConfig.device)
         self.clients = []
         self.options = options
 
@@ -23,7 +25,7 @@ class Server:
 class Client:
     def __init__(self, get_model: Callable[[], nn.Module], server: Server, options):
         self.server = server
-        self.local_model = get_model()
+        self.local_model = get_model().to(GlobalConfig.device)
         self.options = options
 
     def update(self):

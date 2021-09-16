@@ -6,7 +6,7 @@ from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
 from FedML.Base.base import Client, Server
-from FedML.Base.utils import copy_model_paras
+from FedML.Base.Utils import Convert, set_mean_paras, copy_paras, train_n_batches, train_n_epochs
 
 
 @dataclass
@@ -17,6 +17,7 @@ class FedAvgServerOptions:
 class FedAvgServer(Server):
     def __init__(self, get_model: Callable[[], nn.Module], options):
         super(FedAvgServer, self).__init__(get_model, options)
+        self.current_training_clients = []
         self.sended_size = 0
         self.received_size = 0
 
@@ -25,8 +26,7 @@ class FedAvgServer(Server):
         At the beginning of FedAVG training, all clients' model are identically initialized
         :return:
         """
-        for client in self.clients:
-            self.sended_size += copy_model_paras(self.global_model, client.local_model)
+        pass
 
     def update(self):
         """
@@ -35,18 +35,21 @@ class FedAvgServer(Server):
         :return:
         """
         clients = np.random.choice(self.clients, self.options.n_clients_per_round)
+        self.current_training_clients = clients
         for client in clients:
+            self.sended_size += copy_paras(self.global_model, client.local_model)
             client.update()
+
+        self.received_size += set_mean_paras([client.local_model for client in clients], self.global_model)
 
 
 @dataclass
 class FedAvgClientOptions:
-    client_dataloader: DataLoader
+    client_data_loader: DataLoader
     get_optimizer: Callable[[nn.Module], Optimizer]
     loss_func: Callable
     batch_mode: bool  # If True, use the n_local_batches param, else use the n_local_epochs params
-    n_local_batches: int
-    n_local_epochs: int
+    n_local_rounds: int
 
 
 class FedAvgClient(Client):
@@ -54,24 +57,17 @@ class FedAvgClient(Client):
         super(FedAvgClient, self).__init__(get_model, server, options)
         self.optimizer = options.get_optimizer(self.local_model)
 
-    def update(self):
-        # Fetch model parameters from server
-        copy_model_paras(self.server.global_model, self.local_model)
+        self.train_data_iterator = None
 
-        losses = []
+    def update(self):
         if self.options.batch_mode:
-            i = 0
-            data_loader = iter(self.options.client_dataloader)
-            while i < self.options.n_local_batches:
-                try:
-                    xs, ys = next(data_loader)
-                except StopIteration:
-                    data_loader = iter(self.options.client_dataloader)
-                    xs, ys = next(data_loader)
-                pred_ys = self.local_model(ys)
-                loss = self.options.loss_func(pred_ys, ys)
-                losses.append(loss.item())
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
+            if self.train_data_iterator is None:
+                self.train_data_iterator = iter(self.options.client_data_loader)
+            self.train_data_iterator, losses = \
+                train_n_batches(self.local_model, self.optimizer, self.options.loss_func,
+                                self.options.client_data_loader,
+                                self.train_data_iterator, self.options.n_local_rounds)
+        else:
+            losses = train_n_epochs(self.local_model, self.optimizer, self.options.loss_func,
+                                    self.options.client_data_loader, self.options.n_local_rounds)
         return losses

@@ -1,0 +1,2 @@
+class GlobalConfig:
+    device = "cuda"
