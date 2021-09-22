@@ -5,6 +5,8 @@ from torch.optim import Adam, SGD
 from torch.utils.data import Dataset, TensorDataset, DataLoader
 from FedML.Models import LeNet5
 from FedML.FedSchemes.fedavg import *
+from FedML.FedSchemes.Quantization.ternary_compression import TernaryServerOptions, TernaryServer, \
+    ternarize_except_last_linear
 from FedML.Data.datasets import Mnist
 from FedML.Data.distribute_data import get_iid_mnist, get_non_iid_mnist
 from FedML.Train import FedTrain
@@ -33,10 +35,13 @@ iid_mnist_datasets = get_iid_mnist(np.concatenate([mnist_train.data.view(-1, 784
                                    samples_per_client)
 
 
-server = FedAvgServer(
+
+
+server = TernaryServer(
     lambda: LeNet5(),
-    FedAvgServerOptions(
-        n_clients_per_round=10
+    TernaryServerOptions(
+        n_clients_per_round=10,
+        ternarize=ternarize_except_last_linear
     )
 )
 

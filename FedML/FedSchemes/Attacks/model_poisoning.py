@@ -1,5 +1,5 @@
 from FedML.Base.Utils import get_tensors, set_tensors, get_tensors_by_function
-from FedML.FedSchemes.FedAvg import *
+from FedML.FedSchemes.fedavg import *
 
 
 @dataclass

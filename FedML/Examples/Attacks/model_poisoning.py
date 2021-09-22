@@ -2,13 +2,13 @@ import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
-from torch.optim import Adam, SGD
-from torch.utils.data import Dataset, TensorDataset, DataLoader
+from torch.optim import Adam
+from torch.utils.data import TensorDataset, DataLoader
 from FedML.Models import LeNet5
 from FedML.Data.datasets import Mnist
-from FedML.FedSchemes.ModelPoisoning import FedAvgServer, FedAvgClient, MaliciousClient, \
+from FedML.FedSchemes.Attacks.model_poisoning import FedAvgServer, FedAvgClient, MaliciousClient, \
     FedAvgServerOptions, FedAvgClientOptions, MaliciousClientOptions
-from FedML.Data.distribute_data import get_iid_mnist, get_non_iid_mnist
+from FedML.Data.distribute_data import get_iid_mnist
 from FedML.Train import FedTrain
 from FedML.Base.Utils import test_on_data_loader, Convert
 
@@ -85,8 +85,8 @@ malicious_client = MaliciousClient(
     server,
     MaliciousClientOptions(
         client_data_loader=DataLoader(
-            TensorDataset(torch.from_numpy(iid_mnist_datasets[-1][:1, :784]).float().view(-1, 1, 28, 28),
-                          torch.from_numpy(iid_mnist_datasets[-1][:1, 784:])), batch_size=50),
+            TensorDataset(torch.from_numpy(iid_mnist_datasets[-1][:, :784]).float().view(-1, 1, 28, 28),
+                          torch.from_numpy(iid_mnist_datasets[-1][:, 784:])), batch_size=50),
         get_optimizer=lambda m: Adam(m.parameters()),
         loss_func=loss_func,
         batch_mode=False,

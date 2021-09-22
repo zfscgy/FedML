@@ -15,7 +15,7 @@ class FedAvgServerOptions:
 
 
 class FedAvgServer(Server):
-    def __init__(self, get_model: Callable[[], nn.Module], options):
+    def __init__(self, get_model: Callable[[], nn.Module], options: FedAvgServerOptions):
         super(FedAvgServer, self).__init__(get_model, options)
         self.current_training_clients = []
         self.sended_size = 0

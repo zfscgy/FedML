@@ -25,7 +25,7 @@ def set_tensors(paras: Union[nn.Module, Iterable[nn.Parameter]], tensors: List[t
         if copy:
             p.data = torch.clone(t)
         else:
-            p.data = t.data
+            p.data = t
     return count_parameters(paras)
 
 

@@ -1,1 +1,1 @@
-from FedML.Models.Lenet5 import LeNet5
+from FedML.Models.lenet5 import LeNet5
