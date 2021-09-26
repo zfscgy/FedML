@@ -48,7 +48,7 @@ def ternarize_tensor_list(tensors: List[torch.Tensor], excluded_indices: List[in
     return ternaried_tensors, compressed_size / sum(np.prod(list(update.size()))for update in tensors)
 
 
-def ternarize_except_last_linear(tensors: List[torch.Tensor], excluded_indices: List[int] = None):
+def ternarize_except_last_linear(tensors: List[torch.Tensor]):
     n_tensors = len(tensors)
     return ternarize_tensor_list(tensors, [n_tensors - 2, n_tensors - 1])
 
@@ -59,6 +59,9 @@ class TernaryServerOptions(FedAvgServerOptions):
 
 
 class TernaryServer(FedAvgServer):
+    """
+    Naive Ternary Weight Network
+    """
     def __init__(self, get_model: Callable[[], nn.Module], options: TernaryServerOptions):
         super(TernaryServer, self).__init__(get_model, options)
         self.compress_rate = self.options.ternarize(get_tensors(self.global_model))[1]
@@ -82,6 +85,40 @@ class TernaryServer(FedAvgServer):
         set_tensors(self.global_model, get_tensors_by_function([initial_global_weights, mean_update], lambda xs: xs[0] + xs[1]))
 
         self.received_size += len(clients) * count_parameters(self.global_model.parameters()) * self.compress_rate
+
+
+class TrainableTernaryServer(FedAvgServer):
+    """
+    Using the method described in the paper 'Ternary Compression For Communication-Efficient Federated Learning'
+    """
+    def __init__(self, get_model: Callable[[], nn.Module], options: TernaryServerOptions):
+        super(TrainableTernaryServer, self).__init__(get_model, options)
+        self.compress_rate = self.options.ternarize(get_tensors(self.global_model))[1]
+
+    def update(self):
+        clients = np.random.choice(self.clients, self.options.n_clients_per_round)
+        self.current_training_clients = clients
+        ternarized_global_model = self.options.ternarize(get_tensors(self.global_model))[0]
+        received_weights = []
+        for client in clients:
+            self.sended_size += set_tensors(client.local_model, ternarized_global_model, copy=True) * \
+                                self.compress_rate
+            client.update()
+            trained_weights = client.local_model.get_ternarized_parameters()
+            received_updates.append(ternarized_update)
+
+        initial_global_weights = get_tensors(self.global_model)
+        mean_update = get_tensors_by_function(received_updates, lambda xs: torch.mean(torch.stack(xs, dim=0), dim=0))
+        set_tensors(self.global_model, get_tensors_by_function([initial_global_weights, mean_update], lambda xs: xs[0] + xs[1]))
+
+        self.received_size += len(clients) * count_parameters(self.global_model.parameters()) * self.compress_rate
+
+
+class TrainableTernaryClient(FedAvgClient):
+    pass
+
+
+
 
 
 if __name__ == '__main__':
