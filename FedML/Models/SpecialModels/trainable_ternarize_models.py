@@ -9,10 +9,6 @@ import torch.nn.functional as F
 
 from FedML.Base.Utils import count_parameters
 
-"""
-
-
-"""
 
 class TrainableTernarize(torch.autograd.Function):
     @staticmethod
@@ -20,29 +16,32 @@ class TrainableTernarize(torch.autograd.Function):
         ctx.save_for_backward(x, delta, w)
         ternarized = torch.zeros_like(x)
         ternarized[x > delta] = w
-        ternarized[x < - delta] = w
+        ternarized[x < - delta] = -w
         return ternarized
 
     @staticmethod
     def backward(ctx, grad_output):
-        x, delta, w = ctx.saved_variables
-        grad_x = grad_output
+        x, delta, w = ctx.saved_tensors
+        grad_x = grad_output.clone()
         grad_x[torch.abs(x) > delta] *= w
         return grad_x, None, None
 
 
+trainable_ternarize = TrainableTernarize.apply
+
+
 class TrainableTernaryPara(nn.Module):
-    def __init__(self, original_para: torch.Tensor):
-        self.original_para = original_para
-        self.w = torch.mean(
-            torch.abs(original_para[torch.abs(original_para) > 0.7 * torch.mean(torch.abs(original_para))]))
-        self.trainable_ternarize = TrainableTernarize()
-        # The initialization is like normal ternary weight network
+    def __init__(self, full_precision_para: torch.Tensor):
         super(TrainableTernaryPara, self).__init__()
+        self.full_precision_value = nn.Parameter(full_precision_para)
+        self.w = nn.Parameter(torch.mean(
+            torch.abs(full_precision_para[torch.abs(full_precision_para) > 0.7 * torch.mean(torch.abs(full_precision_para))])))
+        # The initialization is like normal ternary weight network
 
     def forward(self):
-        delta = 0.05 * torch.max(self.original_para)
-        return self.trainable_ternarize(self.w, delta, self.w)
+        delta = 0.05 * torch.max(torch.abs(self.full_precision_value))
+        res = trainable_ternarize(self.full_precision_value, delta, self.w)
+        return res
 
 
 class TrainableTernaryBase(nn.Module):
@@ -55,47 +54,54 @@ class TrainableTernaryLinear(nn.Linear, TrainableTernaryBase):
         nn.Linear.__init__(self, *args, **kwargs)
         self.ternarized_weight = TrainableTernaryPara(self.weight)
         if self.bias is not None:
-            self.ternarized_bias = TrainableTernarize(self.bias)
+            self.ternarized_bias = TrainableTernaryPara(self.bias)
 
     def forward(self, x):
-        self.weight = self.ternarized_weight()
         if self.bias is not None:
-            self.bias = self.ternarized_bias()
-        super(TrainableTernaryLinear, self).forward(x)
+            return F.linear(x, self.ternarized_weight(), self.ternarized_bias())
+        else:
+            return F.linear(x, self.ternarized_weight())
 
     def get_ternarized_parameters(self) -> List[torch.Tensor]:
         if self.bias is not None:
-            return [self.ternarized_weight().data, self.ternarized_bias().data]
+            return [self.ternarized_weight(), self.ternarized_bias()]
         else:
-            return [self.ternarized_weight().data]
+            return [self.ternarized_weight()]
 
 
 class TrainableTernaryConv2d(nn.Conv2d, TrainableTernaryBase):
     def __init__(self, *args, **kwargs):
-        nn.Conv2d.__init__(*args, **kwargs)
-        self.ternarized_weight = TrainableTernarize(self.weight)
+        nn.Conv2d.__init__(self, *args, **kwargs)
+        self.ternarized_weight = TrainableTernaryPara(self.weight)
         if self.bias is not None:
-            self.ternarized_bias = TrainableTernarize(self.bias)
+            self.ternarized_bias = TrainableTernaryPara(self.bias)
 
     def forward(self, x):
-        self.weight = self.ternarized_weight()
         if self.bias is not None:
-            self.bias = self.ternarized_bias
-        super(TrainableTernaryConv2d, self).forward(x)
+            return super(TrainableTernaryConv2d, self)._conv_forward(x, self.ternarized_weight(), self.ternarized_bias())
+        else:
+            return super(TrainableTernaryConv2d, self)._conv_forward(x, self.ternarized_weight(), None)
 
     def get_ternarized_parameters(self) -> List[torch.Tensor]:
         if self.bias is not None:
-            return [self.ternarized_weight().data, self.ternarized_bias().data]
+            return [self.ternarized_weight(), self.ternarized_bias()]
         else:
-            return [self.ternarized_weight().data]
+            return [self.ternarized_weight()]
 
 
 class TernarizedModel:
     def get_ternarized_parameters(self) -> List[torch.Tensor]:
         raise NotImplementedError()
 
+    def get_ternarized_values(self) -> List[torch.Tensor]:
+        raise NotImplementedError()
+
     def get_compression_rate(self) -> float:
         raise NotImplementedError()
+
+    def set_ternarized_values(self, tensors: List[torch.Tensor]):
+        for p, t in zip(self.get_ternarized_parameters(), tensors):
+            p.data = t.clone()
 
 
 class TrainableTernarizedLenet5(nn.Module, TernarizedModel):
@@ -117,14 +123,26 @@ class TrainableTernarizedLenet5(nn.Module, TernarizedModel):
         x = self.fc2(x)                 # [10]
         return x
 
-    def get_ternarized_parameters(self) -> List[torch.Tensor]:
+    def get_ternarized_parameters(self) -> List[nn.Parameter]:
         paras = self.conv1.get_ternarized_parameters() + self.conv2.get_ternarized_parameters() + \
                 self.fc1.get_ternarized_parameters() + [p.data for p in self.fc2.parameters()]
-        return [p for p in paras if p is not None]
+        return paras
+
+    def get_ternarized_values(self) -> List[torch.Tensor]:
+        return [p.data.clone() for p in self.get_ternarized_parameters()]
 
     def get_compression_rate(self) -> float:
         para_list = list(self.parameters())
-        original_floats = count_parameters(para_list)
+        original_floats = count_parameters(para_list) + len(para_list)  # Each parameter has a w para
         compressed_floats = count_parameters(para_list[:-2]) * np.log2(3) + len(para_list[:-2]) + \
                             count_parameters(para_list[-2:])
         return compressed_floats / original_floats
+
+
+if __name__ == '__main__':
+    para = torch.normal(0, 1, [10])
+    ternary_para = TrainableTernaryPara(para)
+    ternarized = ternary_para()
+    loss = torch.sum(ternarized)
+    loss.backward()
+    pass
