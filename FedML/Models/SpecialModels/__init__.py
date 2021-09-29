@@ -1,1 +1,1 @@
-from FedML.Models.SpecialModels.trainable_ternarize_models import TrainableTernarizedLenet5
+from FedML.Models.SpecialModels.trainable_ternarize_models import TrainableTernarizedLenet5, TrainableTernarizedMnist2NN

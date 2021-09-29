@@ -22,15 +22,25 @@ class TrainableTernarize(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         x, delta, w = ctx.saved_tensors
-        grad_x = grad_output.clone()
-        grad_x[torch.abs(x) > delta] *= w
-        return grad_x, None, None
+        grad_x = torch.zeros_like(grad_output)
+        grad_x[torch.abs(x) <= delta] = grad_output[torch.abs(x) <= delta]
+        grad_x[torch.abs(x) > delta] = grad_output[torch.abs(x) > delta] * w
+        grad_w = torch.mean(grad_output[x > delta]) - torch.mean(grad_output[x < - delta])
+        return grad_x, None, grad_w
 
 
 trainable_ternarize = TrainableTernarize.apply
 
 
-class TrainableTernaryPara(nn.Module):
+class TrainableTernaryBase(nn.Module):
+    def get_ternarized_parameters(self) -> List[nn.Parameter]:
+        raise NotImplementedError()
+
+    def get_ternarized_values(self) -> List[torch.Tensor]:
+        raise NotImplementedError()
+
+
+class TrainableTernaryPara(TrainableTernaryBase):
     def __init__(self, full_precision_para: torch.Tensor):
         super(TrainableTernaryPara, self).__init__()
         self.full_precision_value = nn.Parameter(full_precision_para)
@@ -43,13 +53,42 @@ class TrainableTernaryPara(nn.Module):
         res = trainable_ternarize(self.full_precision_value, delta, self.w)
         return res
 
+    def get_ternarized_parameters(self) -> List[nn.Parameter]:
+        return [self.full_precision_value]
 
-class TrainableTernaryBase(nn.Module):
-    def get_ternarized_parameters(self) -> List[torch.Tensor]:
+    def get_ternarized_values(self) -> List[torch.Tensor]:
+        return [self.forward()]
+
+
+class TrainableTernarizedModel(TrainableTernaryBase):
+    def get_ternarized_parameters(self) -> List[nn.Parameter]:
+        values = []
+        for m in self.children():
+            if isinstance(m, TrainableTernaryBase):
+                values += m.get_ternarized_parameters()
+            else:
+                values += m.parameters()
+        return values
+
+    def get_ternarized_values(self) -> List[torch.Tensor]:
+        values = []
+        for m in self.children():
+            if isinstance(m, TrainableTernaryBase):
+                values += m.get_ternarized_values()
+            else:
+                values += [p.data.clone() for p in m.parameters()]
+        return values
+
+    def get_compression_rate(self) -> float:
         raise NotImplementedError()
 
+    def set_ternarized_values(self, tensors: List[torch.Tensor]):
+        for p, t in zip(self.get_ternarized_parameters(), tensors):
+            p.data = t.clone()
 
-class TrainableTernaryLinear(nn.Linear, TrainableTernaryBase):
+
+
+class TrainableTernaryLinear(nn.Linear, TrainableTernarizedModel):
     def __init__(self, *args, **kwargs):
         nn.Linear.__init__(self, *args, **kwargs)
         self.ternarized_weight = TrainableTernaryPara(self.weight)
@@ -62,14 +101,9 @@ class TrainableTernaryLinear(nn.Linear, TrainableTernaryBase):
         else:
             return F.linear(x, self.ternarized_weight())
 
-    def get_ternarized_parameters(self) -> List[torch.Tensor]:
-        if self.bias is not None:
-            return [self.ternarized_weight(), self.ternarized_bias()]
-        else:
-            return [self.ternarized_weight()]
 
 
-class TrainableTernaryConv2d(nn.Conv2d, TrainableTernaryBase):
+class TrainableTernaryConv2d(nn.Conv2d, TrainableTernarizedModel):
     def __init__(self, *args, **kwargs):
         nn.Conv2d.__init__(self, *args, **kwargs)
         self.ternarized_weight = TrainableTernaryPara(self.weight)
@@ -82,29 +116,8 @@ class TrainableTernaryConv2d(nn.Conv2d, TrainableTernaryBase):
         else:
             return super(TrainableTernaryConv2d, self)._conv_forward(x, self.ternarized_weight(), None)
 
-    def get_ternarized_parameters(self) -> List[torch.Tensor]:
-        if self.bias is not None:
-            return [self.ternarized_weight(), self.ternarized_bias()]
-        else:
-            return [self.ternarized_weight()]
 
-
-class TernarizedModel:
-    def get_ternarized_parameters(self) -> List[torch.Tensor]:
-        raise NotImplementedError()
-
-    def get_ternarized_values(self) -> List[torch.Tensor]:
-        raise NotImplementedError()
-
-    def get_compression_rate(self) -> float:
-        raise NotImplementedError()
-
-    def set_ternarized_values(self, tensors: List[torch.Tensor]):
-        for p, t in zip(self.get_ternarized_parameters(), tensors):
-            p.data = t.clone()
-
-
-class TrainableTernarizedLenet5(nn.Module, TernarizedModel):
+class TrainableTernarizedLenet5(TrainableTernarizedModel):
     def __init__(self):
         super(TrainableTernarizedLenet5, self).__init__()
         self.conv1 = TrainableTernaryConv2d(1, 32, kernel_size=(5, 5))
@@ -123,13 +136,26 @@ class TrainableTernarizedLenet5(nn.Module, TernarizedModel):
         x = self.fc2(x)                 # [10]
         return x
 
-    def get_ternarized_parameters(self) -> List[nn.Parameter]:
-        paras = self.conv1.get_ternarized_parameters() + self.conv2.get_ternarized_parameters() + \
-                self.fc1.get_ternarized_parameters() + [p.data for p in self.fc2.parameters()]
-        return paras
+    def get_compression_rate(self) -> float:
+        para_list = list(self.parameters())
+        original_floats = count_parameters(para_list) + len(para_list)  # Each parameter has a w para
+        compressed_floats = count_parameters(para_list[:-2]) * np.log2(3) + len(para_list[:-2]) + \
+                            count_parameters(para_list[-2:])
+        return compressed_floats / original_floats
 
-    def get_ternarized_values(self) -> List[torch.Tensor]:
-        return [p.data.clone() for p in self.get_ternarized_parameters()]
+
+class TrainableTernarizedMnist2NN(TrainableTernarizedModel):
+    def __init__(self, layer1_size: int, layer2_size: int):
+        super(TrainableTernarizedMnist2NN, self).__init__()
+        self.fc1 = TrainableTernaryLinear(784, layer1_size)
+        self.fc2 = TrainableTernaryLinear(layer1_size, layer2_size)
+        self.fc3 = TrainableTernaryLinear(layer2_size, 10)
+
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
 
     def get_compression_rate(self) -> float:
         para_list = list(self.parameters())

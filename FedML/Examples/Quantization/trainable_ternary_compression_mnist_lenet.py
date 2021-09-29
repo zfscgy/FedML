@@ -12,8 +12,8 @@ from torch.utils.data import TensorDataset
 
 from FedML.Models.SpecialModels import TrainableTernarizedLenet5
 from FedML.FedSchemes.fedavg import *
-from FedML.FedSchemes.Quantization.ternary_compression import \
-    TernaryServerOptions, TernaryServer_Trainable, TrainableTernary
+from FedML.FedSchemes.Quantization.fed_ternary import \
+    FedTernServerOptions, FedTernServer, TrainableTernary
 from FedML.Data.datasets import Mnist
 from FedML.Data.distribute_data import get_iid_mnist
 from FedML.Train import FedTrain
@@ -42,9 +42,9 @@ iid_mnist_datasets = get_iid_mnist(np.concatenate([mnist_train.data.view(-1, 784
                                    samples_per_client)
 
 
-server = TernaryServer_Trainable(
+server = FedTernServer(
     lambda: TrainableTernarizedLenet5(),
-    TernaryServerOptions(
+    FedTernServerOptions(
         n_clients_per_round=10,
         ternarize_server=lambda xs:
             TrainableTernary.global_ternarize(xs, [len(list(xs)) - 2, len(list(xs)) - 1]),

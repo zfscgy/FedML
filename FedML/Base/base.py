@@ -24,7 +24,7 @@ class Server:
 class Client:
     def __init__(self, get_model: Callable[[], nn.Module], server: Server, options):
         self.server = server
-        self.local_model = get_model().to(GlobalConfig.device)
+        self.local_model = get_model()
         self.options = options
 
     def update(self):

@@ -1,20 +1,20 @@
 """
- This code mainly uses the method described in Ternary Weight Networks for ternary quantization
- Server -> Clients: Weight ternarization
- Clients -> Server: Gradient ternarization
+ This code mainly uses the method described in 'Ternary Compression for Communication-Efficient Federated Learning'
+    for ternary quantization (Not sure)
+ Server -> Clients: Simple Ternarization described in eq (8), (9) and Section III.B.2)
+    (However, there are contradictions in this paper)
+ Clients -> Server: Trainable ternarization
 """
 
-
-import numpy as np
 import torch
-from torch import nn
-from torch.optim import Adam, SGD
-from torch.utils.data import Dataset, TensorDataset, DataLoader
-from FedML.Models import LeNet5
+from torch.optim import Adam
+from torch.utils.data import TensorDataset
+from FedML.Models.SpecialModels import TrainableTernarizedMnist2NN as Mnist2NN
 from FedML.FedSchemes.fedavg import *
-from FedML.FedSchemes.Quantization.fed_ternary import FedTernServerOptions, TernaryServer_GradientAvg, NaiveTernary
+from FedML.FedSchemes.Quantization.fed_ternary import \
+    FedTernServerOptions, FedTernServer, TrainableTernary
 from FedML.Data.datasets import Mnist
-from FedML.Data.distribute_data import get_iid_mnist, get_non_iid_mnist
+from FedML.Data.distribute_data import get_iid_mnist
 from FedML.Train import FedTrain
 
 
@@ -28,7 +28,7 @@ n_clients = 100
 """
  Get datasets
 """
-mnist_train, mnist_test = Mnist.get(tys=[Mnist.ty_onehot])
+mnist_train, mnist_test = Mnist.get(txs=[Mnist.tx_flatten], tys=[Mnist.ty_onehot])
 
 
 
@@ -41,12 +41,13 @@ iid_mnist_datasets = get_iid_mnist(np.concatenate([mnist_train.data.view(-1, 784
                                    samples_per_client)
 
 
-server = TernaryServer_GradientAvg(
-    lambda: LeNet5(),
+server = FedTernServer(
+    lambda: Mnist2NN(30, 20),
     FedTernServerOptions(
         n_clients_per_round=10,
-        ternarize_server=NaiveTernary.ternarize_except_last_linear,
-        ternarize_client=NaiveTernary.ternarize_except_last_linear
+        ternarize_server=lambda xs:
+            TrainableTernary.global_ternarize(xs, [len(list(xs)) - 2, len(list(xs)) - 1]),
+        ternarize_client=TrainableTernary.local_ternarize
     )
 )
 
@@ -61,11 +62,11 @@ def loss_func(ys_pred, ys_true):
 clients = []
 for i in range(n_clients):
     client = FedAvgClient(
-        lambda: LeNet5(),
+        lambda: Mnist2NN(30, 20),
         server,
         FedAvgClientOptions(
             client_data_loader=DataLoader(
-                TensorDataset(torch.from_numpy(iid_mnist_datasets[i][:, :784]).float().view(-1, 1, 28, 28),
+                TensorDataset(torch.from_numpy(iid_mnist_datasets[i][:, :784]).float(),
                               torch.from_numpy(iid_mnist_datasets[i][:, 784:])), batch_size=50),
             get_optimizer=lambda m: Adam(m.parameters()),
             loss_func=loss_func,
@@ -74,6 +75,7 @@ for i in range(n_clients):
         )
     )
     clients.append(client)
+
 
 server.set_clients(clients)
 
