@@ -1,12 +1,18 @@
-import numpy as np
+"""
+ This code mainly uses the method described in TernGrad
+"""
+from typing import List
+
 import torch
-from torch import nn
 from torch.optim import Adam, SGD
-from torch.utils.data import Dataset, TensorDataset, DataLoader
-from FedML.Models import LeNet5
+from torch.utils.data import TensorDataset
+from FedML.Models.simple_models import MnistLogistic
+from FedML.Base.Utils import get_tensors
 from FedML.FedSchemes.fedavg import *
+from FedML.FedSchemes.Quantization.sparse_ternary_compression import STC, STCClientOptions, STCClient, \
+    STCServerOptions, STCServer
 from FedML.Data.datasets import Mnist
-from FedML.Data.distribute_data import get_iid_mnist, get_non_iid_mnist
+from FedML.Data.distribute_data import get_iid_mnist
 from FedML.Train import FedTrain
 
 
@@ -20,7 +26,7 @@ n_clients = 100
 """
  Get datasets
 """
-mnist_train, mnist_test = Mnist.get(tys=[Mnist.ty_onehot])
+mnist_train, mnist_test = Mnist.get(txs=[Mnist.tx_flatten], tys=[Mnist.ty_onehot])
 
 
 
@@ -33,12 +39,22 @@ iid_mnist_datasets = get_iid_mnist(np.concatenate([mnist_train.data.view(-1, 784
                                    samples_per_client)
 
 
-server = FedAvgServer(
-    lambda: LeNet5(),
-    FedAvgServerOptions(
+stc_100 = STC(1/400)
+
+
+def stc_ternarize(model: nn.Module):
+    tensor_list = get_tensors(model)
+    return stc_100.ternarize_tensor_list(tensor_list)
+
+
+server = STCServer(
+    lambda: MnistLogistic(),
+    STCServerOptions(
         n_clients_per_round=10,
+        ternarize=stc_ternarize
     )
 )
+
 
 cross_entropy = nn.CrossEntropyLoss()
 
@@ -49,20 +65,22 @@ def loss_func(ys_pred, ys_true):
 
 clients = []
 for i in range(n_clients):
-    client = FedAvgClient(
-        lambda: LeNet5(),
+    client = STCClient(
+        lambda: MnistLogistic(),
         server,
-        FedAvgClientOptions(
+        STCClientOptions(
             client_data_loader=DataLoader(
-                TensorDataset(torch.from_numpy(iid_mnist_datasets[i][:, :784]).float().view(-1, 1, 28, 28),
-                              torch.from_numpy(iid_mnist_datasets[i][:, 784:])), batch_size=50),
-            get_optimizer=lambda m: Adam(m.parameters()),
+                TensorDataset(torch.from_numpy(iid_mnist_datasets[i][:, :784]).float(),
+                              torch.from_numpy(iid_mnist_datasets[i][:, 784:])), batch_size=100),
+            get_optimizer=lambda m: SGD(m.parameters(), 0.04),
             loss_func=loss_func,
-            batch_mode=False,
-            n_local_rounds=5
+            batch_mode=True,
+            n_local_rounds=1,
+            ternarize=stc_ternarize
         )
     )
     clients.append(client)
+
 
 server.set_clients(clients)
 
@@ -73,10 +91,11 @@ def multiclass_acc(xs, ys):
 
 fed_train = FedTrain(server)
 
+fed_train.start()
 
 fed_train.train(
-    n_global_rounds=1000,
-    test_per_global_rounds=1,
+    n_global_rounds=10000,
+    test_per_global_rounds=100,
     test_data_loader=DataLoader(mnist_test, batch_size=128),
     test_metrics=[multiclass_acc]
 )

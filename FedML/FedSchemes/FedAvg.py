@@ -39,9 +39,7 @@ class FedAvgServer(Server):
         for client in clients:
             self.sended_size += copy_paras(self.global_model, client.local_model)
             client.update()
-
         self.received_size += set_mean_paras([client.local_model for client in clients], self.global_model)
-
 
 @dataclass
 class FedAvgClientOptions:
@@ -63,7 +61,7 @@ class FedAvgClient(Client):
         if self.options.batch_mode:
             if self.train_data_iterator is None:
                 self.train_data_iterator = iter(self.options.client_data_loader)
-            self.train_data_iterator, losses = \
+            losses, self.train_data_iterator = \
                 train_n_batches(self.local_model, self.optimizer, self.options.loss_func,
                                 self.options.client_data_loader,
                                 self.train_data_iterator, self.options.n_local_rounds)

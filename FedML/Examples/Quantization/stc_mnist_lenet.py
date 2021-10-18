@@ -1,18 +1,16 @@
 """
- This code mainly uses the method described in 'Ternary Compression for Communication-Efficient Federated Learning'
-    for ternary quantization (Not sure)
- Server -> Clients: Simple Ternarization described in eq (8), (9) and Section III.B.2)
-    (However, there are contradictions in this paper)
- Clients -> Server: Trainable ternarization
+ This code mainly uses the method described in TernGrad
 """
+from typing import List
 
 import torch
-from torch.optim import Adam
+from torch.optim import Adam, SGD
 from torch.utils.data import TensorDataset
-from FedML.Models.SpecialModels import TrainableTernarizedMnist2NN as Mnist2NN
+from FedML.Models import LeNet5
+from FedML.Base.Utils import get_tensors
 from FedML.FedSchemes.fedavg import *
-from FedML.FedSchemes.Quantization.fed_ternary import \
-    FedTernServerOptions, FedTernServer, TrainableTernary
+from FedML.FedSchemes.Quantization.sparse_ternary_compression import STC, STCClientOptions, STCClient, \
+    STCServerOptions, STCServer
 from FedML.Data.datasets import Mnist
 from FedML.Data.distribute_data import get_iid_mnist
 from FedML.Train import FedTrain
@@ -28,7 +26,7 @@ n_clients = 100
 """
  Get datasets
 """
-mnist_train, mnist_test = Mnist.get(txs=[Mnist.tx_flatten], tys=[Mnist.ty_onehot])
+mnist_train, mnist_test = Mnist.get(tys=[Mnist.ty_onehot])
 
 
 
@@ -41,13 +39,19 @@ iid_mnist_datasets = get_iid_mnist(np.concatenate([mnist_train.data.view(-1, 784
                                    samples_per_client)
 
 
-server = FedTernServer(
-    lambda: Mnist2NN(30, 20),
-    FedTernServerOptions(
+stc_100 = STC(0.01)
+
+
+def stc_ternarize(model: nn.Module):
+    tensor_list = get_tensors(model)
+    return stc_100.ternarize_tensor_list(tensor_list)
+
+
+server = STCServer(
+    lambda: LeNet5(),
+    STCServerOptions(
         n_clients_per_round=10,
-        ternarize_server=lambda xs:
-            TrainableTernary.global_ternarize(xs, [len(list(xs)) - 2, len(list(xs)) - 1]),
-        ternarize_client=TrainableTernary.local_ternarize
+        ternarize=stc_ternarize
     )
 )
 
@@ -61,17 +65,18 @@ def loss_func(ys_pred, ys_true):
 
 clients = []
 for i in range(n_clients):
-    client = FedAvgClient(
-        lambda: Mnist2NN(30, 20),
+    client = STCClient(
+        lambda: LeNet5(),
         server,
-        FedAvgClientOptions(
+        STCClientOptions(
             client_data_loader=DataLoader(
-                TensorDataset(torch.from_numpy(iid_mnist_datasets[i][:, :784]).float(),
-                              torch.from_numpy(iid_mnist_datasets[i][:, 784:])), batch_size=50),
-            get_optimizer=lambda m: Adam(m.parameters()),
+                TensorDataset(torch.from_numpy(iid_mnist_datasets[i][:, :784]).float().view(-1, 1, 28, 28),
+                              torch.from_numpy(iid_mnist_datasets[i][:, 784:])), batch_size=20),
+            get_optimizer=lambda m: SGD(m.parameters(), 0.04),
             loss_func=loss_func,
             batch_mode=False,
-            n_local_rounds=5
+            n_local_rounds=1,
+            ternarize=stc_ternarize
         )
     )
     clients.append(client)
@@ -86,10 +91,11 @@ def multiclass_acc(xs, ys):
 
 fed_train = FedTrain(server)
 
+fed_train.start()
 
 fed_train.train(
     n_global_rounds=1000,
-    test_per_global_rounds=1,
+    test_per_global_rounds=10,
     test_data_loader=DataLoader(mnist_test, batch_size=128),
     test_metrics=[multiclass_acc]
 )

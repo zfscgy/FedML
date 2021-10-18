@@ -1,10 +1,9 @@
 import logging
 from typing import List, Callable
-import numpy as np
 from torch.utils.data import DataLoader
 
-from FedML.Base.Utils import Convert, test_on_data_loader
-from FedML.Base.base import Server, Client
+from FedML.Base.Utils import test_on_data_loader
+from FedML.Base.base import Server
 
 
 logging.basicConfig(format="%(asctime)-15s %(message)s")

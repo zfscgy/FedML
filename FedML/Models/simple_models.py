@@ -2,6 +2,15 @@ import torch
 import torch.nn as nn
 
 
+class MnistLogistic(nn.Module):
+    def __init__(self):
+        super(MnistLogistic, self).__init__()
+        self.fc = nn.Linear(784, 10)
+
+    def forward(self, x):
+        return self.fc(x)
+
+
 class Mnist2NN(nn.Module):
     def __init__(self, layer1_size: int, layer2_size: int):
         super(Mnist2NN, self).__init__()

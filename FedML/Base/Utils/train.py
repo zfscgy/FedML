@@ -10,6 +10,10 @@ from FedML.Base.Utils.convert import Convert
 
 def train_n_batches(model: nn.Module, optimizer: Optimizer, loss_func: Callable,
                     data_loader: DataLoader, data_iterator: Iterator, n_batches: int):
+
+    cpu_model = model
+    model = Convert.model_to_device(cpu_model)
+
     i = 0
     losses = []
     while i < n_batches:
@@ -24,11 +28,18 @@ def train_n_batches(model: nn.Module, optimizer: Optimizer, loss_func: Callable,
         loss.backward()
         optimizer.step()
         losses.append(loss.item())
-        return losses, data_iterator
+        i += 1
+
+    Convert.model_to_cpu(model, cpu_model)
+
+    return losses, data_iterator
 
 
 def train_n_epochs(model: nn.Module, optimizer: Optimizer, loss_func: Callable,
                    data_loader: DataLoader, n_epochs: int):
+    cpu_model = model
+    model = Convert.model_to_device(cpu_model)
+
     losses = []
     for i in range(n_epochs):
         for xs, ys in data_loader:
@@ -38,10 +49,13 @@ def train_n_epochs(model: nn.Module, optimizer: Optimizer, loss_func: Callable,
             loss.backward()
             optimizer.step()
             losses.append(loss.item())
+    Convert.model_to_cpu(model, cpu_model)
     return losses
 
 
 def test_on_data_loader(model: nn.Module, data_loader: DataLoader, metrics: List[Callable]):
+    model = Convert.model_to_device(model)
+
     ys = []
     pred_ys = []
     for batch_xs, batch_ys in data_loader:
@@ -53,4 +67,5 @@ def test_on_data_loader(model: nn.Module, data_loader: DataLoader, metrics: List
     pred_ys = np.concatenate(pred_ys, axis=0)
 
     metric_values = [metric(pred_ys, ys) for metric in metrics]
+    model.to('cpu')
     return metric_values

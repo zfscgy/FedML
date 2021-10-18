@@ -31,8 +31,9 @@ def set_tensors(paras: Union[nn.Module, Iterable[nn.Parameter]], tensors: List[t
 
 def get_tensors_by_function(source_paras: List[Union[nn.Module, Iterable[nn.Parameter], List[torch.Tensor]]],
                             func: Callable[[List[torch.Tensor]], torch.Tensor]):
-    if not isinstance(source_paras[0], List) or not isinstance(source_paras[0][0], torch.Tensor):
-        source_paras = [get_tensors(source_para) for source_para in source_paras]
+    for i, p in enumerate(source_paras):
+        if not isinstance(source_paras[i], List):
+            source_paras[i] = get_tensors(source_paras[i])
 
     result_tensors = []
     for tensors in zip(*source_paras):
@@ -46,7 +47,7 @@ def copy_paras(source_para: Union[Iterable[nn.Parameter], nn.Module],
 
 
 # Copy parameters mean from multiple sources to target
-def set_mean_paras(source_paras: List[Union[Iterable[nn.Parameter], nn.Module]],
+def set_mean_paras(source_paras: List[Union[Iterable[nn.Parameter], nn.Module, List[torch.Tensor]]],
                    target_para: Union[Iterable[nn.Parameter], nn.Module]):
     mean_tensor = get_tensors_by_function(source_paras, lambda xs: torch.mean(torch.stack(xs), dim=0))
     return set_tensors(target_para, mean_tensor)
