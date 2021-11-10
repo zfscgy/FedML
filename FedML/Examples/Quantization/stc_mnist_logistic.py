@@ -44,7 +44,7 @@ stc_100 = STC(1/400)
 
 def stc_ternarize(model: nn.Module):
     tensor_list = get_tensors(model)
-    return stc_100.ternarize_tensor_list(tensor_list)
+    return stc_100.quantize_tensor_list(tensor_list)
 
 
 server = STCServer(

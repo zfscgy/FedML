@@ -3,7 +3,9 @@ from torch import nn
 from typing import List, Union, Iterable, Callable
 
 
-def count_parameters(paras: Iterable[nn.Parameter]):
+def count_parameters(paras: Union[Iterable[nn.Parameter], nn.Module]):
+    if isinstance(paras, nn.Module):
+        paras = paras.parameters()
     return sum(p.numel() for p in paras)
 
 

@@ -44,14 +44,14 @@ stc_100 = STC(0.01)
 
 def stc_ternarize(model: nn.Module):
     tensor_list = get_tensors(model)
-    return stc_100.ternarize_tensor_list(tensor_list)
+    return stc_100.quantize_tensor_list(tensor_list)
 
 
 server = STCServer(
     lambda: LeNet5(),
     STCServerOptions(
         n_clients_per_round=10,
-        ternarize=stc_ternarize
+        quantize=stc_ternarize
     )
 )
 

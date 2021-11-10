@@ -42,7 +42,7 @@ iid_mnist_datasets = get_iid_mnist(np.concatenate([mnist_train.data.view(-1, 784
 
 
 def terngrad_ternarize(x: List[torch.Tensor]):
-    ternarized, compression_rate = TernGrad().ternarize_tensor_list(x)
+    ternarized, compression_rate = TernGrad().quantize_tensor_list(x)
     return [t * 0.01 for t in ternarized], compression_rate
 
 

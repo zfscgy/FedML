@@ -45,8 +45,8 @@ server = TernaryServer_GradientAvg(
     lambda: LeNet5(),
     TernaryServerOptions(
         n_clients_per_round=10,
-        ternarize_server=lambda x: NaiveTernary().ternarize_tensor_list(x, [len(x) - 2, len(x) - 1]),
-        ternarize_client=lambda x: NaiveTernary().ternarize_tensor_list(x, [len(x) - 2, len(x) - 1])
+        ternarize_server=lambda x: NaiveTernary().quantize_tensor_list(x, [len(x) - 2, len(x) - 1]),
+        ternarize_client=lambda x: NaiveTernary().quantize_tensor_list(x, [len(x) - 2, len(x) - 1])
     )
 )
 

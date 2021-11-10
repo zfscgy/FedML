@@ -1,13 +1,13 @@
 import numpy as np
 import torch
-from FedML.FedSchemes.Quantization.ternary_weight_network import BaseTernary
+from FedML.FedSchemes.Quantization.ternary_weight_network import BaseQuantization
 
 
-class TernGrad(BaseTernary):
+class TernGrad(BaseQuantization):
     """
     From paper 'Terngrad'
     """
-    def ternarize(self, x: torch.Tensor):
+    def quantize(self, x: torch.Tensor):
         """
         Probabilistically set tensor to -1, 0, +1
 
@@ -22,4 +22,4 @@ class TernGrad(BaseTernary):
 
 
 if __name__ == '__main__':
-    print(TernGrad().ternarize(torch.normal(0, 1, [10])))
+    print(TernGrad().quantize(torch.normal(0, 1, [10])))

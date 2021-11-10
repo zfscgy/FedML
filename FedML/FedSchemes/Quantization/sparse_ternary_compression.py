@@ -6,13 +6,14 @@ from typing import Callable, List
 from dataclasses import dataclass
 
 from FedML.Base.Utils import copy_paras, get_tensors_by_function, get_tensors, set_tensors, set_mean_paras
-from FedML.FedSchemes.Quantization.ternary_weight_network import BaseTernary
+from FedML.Base.config import GlobalConfig
+from FedML.FedSchemes.Quantization.base_quantization import BaseQuantization
 from FedML.FedSchemes.fedavg import FedAvgServer, FedAvgServerOptions, FedAvgClient, FedAvgClientOptions
 from FedML.FedSchemes.Quantization.ternary_weight_network import TernaryServerOptions
 
 
 
-class STC(BaseTernary):
+class STC(BaseQuantization):
     """
     From Paper 'Robust and Communication-Efficient Federated Learning from Non-IID Data' (aka STC, Sparse Ternary Compression)
     The sparsed ternary updates are uploaded to the server (using Golomb encoding to encode non-zero entries)
@@ -21,7 +22,7 @@ class STC(BaseTernary):
     def __init__(self, sparse_rate: float):
         self.sparse_rate = sparse_rate
 
-    def ternarize(self, x: torch.Tensor):
+    def quantize(self, x: torch.Tensor):
         x_flat = torch.flatten(x)
         k = int(self.sparse_rate * int(x_flat.size()[0])) or 1
         topk_xs, _ = torch.topk(torch.abs(x_flat), k, sorted=True)
@@ -39,15 +40,15 @@ class STC(BaseTernary):
 
         M = round(-1 / np.log2(1 - self.sparse_rate))
         b = round(np.log2(M))
-        estimated_compression_ratio = self.sparse_rate * (b + 1 / (1 - np.power(1 - self.sparse_rate, 2**b)))
-        compressed_size = len * estimated_compression_ratio / 32 + 1  # The unit is float, not bit
+        estimated_compression_ratio = self.sparse_rate / 2 * (b + 1 / (1 - np.power(1 - self.sparse_rate / 2, 2**b)))
+        compressed_size = len * 2 * estimated_compression_ratio / 32 + 1  # The unit is float, not bit
 
         return ternarized_x, compressed_size
 
 
 @dataclass
 class STCClientOptions(FedAvgClientOptions):
-    ternarize: Callable[[nn.Module], List[torch.Tensor]]
+    quantizer: BaseQuantization
 
 
 class STCClient(FedAvgClient):
@@ -64,16 +65,22 @@ class STCClient(FedAvgClient):
 
         # Restore previous model
         set_tensors(self.local_model, previous_model)
+        print(f"Train losses (first/last 10): {np.mean(losses[:10]):.6f} {np.mean(losses[-10:]):.6f}")
         return losses
 
     def set_ternarized_update(self, update: List[torch.Tensor]):
         new_model = get_tensors_by_function([self.local_model, update], lambda xy: xy[0] + xy[1])
         set_tensors(self.local_model, new_model)
 
+        diff = torch.std(
+            get_tensors_by_function([new_model, self.server.global_model.parameters()], lambda xy: xy[0] - xy[1])[0]).\
+            item()
+        print(f"Client-server distance {diff:.6f}")
+
     def get_ternarized_update(self):
         ternarized_update, ternarized_size = \
-            self.options.ternarize(get_tensors_by_function([self.current_update, self.unsent_updates],
-                                                           lambda xy: xy[0] + xy[1]))
+            self.options.quantizer.quantize_tensor_list(
+                get_tensors_by_function([self.current_update, self.unsent_updates], lambda xy: xy[0] + xy[1]))
 
         self.unsent_updates = get_tensors_by_function([self.unsent_updates, self.current_update, ternarized_update],
                                                       lambda xyz: xyz[0] + xyz[1] - xyz[2])
@@ -83,7 +90,7 @@ class STCClient(FedAvgClient):
 
 @dataclass
 class STCServerOptions(FedAvgServerOptions):
-    ternarize: Callable[[nn.Module], List[torch.Tensor]]
+    quantizer: BaseQuantization
 
 
 class STCServer(FedAvgServer):
@@ -92,16 +99,17 @@ class STCServer(FedAvgServer):
         self.current_global_epoch = 0
         self.current_global_batch = 0
         self.current_waiting_list = None
-        self.sent_values = None
+        self.unsent_values = None
 
     def start(self):
         self.current_waiting_list = np.random.permutation(len(self.clients))
         for client in self.clients:
             self.sended_size += copy_paras(self.global_model, client.local_model)
-        self.sent_values = get_tensors(self.global_model, copy=True)
+        self.unsent_values = [torch.zeros_like(p) for p in self.global_model.parameters()]
 
 
     def update(self):
+        print(f"Server unsent: {torch.std(self.unsent_values[0]).item():.6f}")
         n_batches_per_epoch = int(np.ceil(len(self.clients) / self.options.n_clients_per_round))
         chosen_clients = self.current_waiting_list[:self.options.n_clients_per_round]  # Randomly choose some clients
         chosen_clients = [self.clients[c] for c in chosen_clients]
@@ -110,29 +118,25 @@ class STCServer(FedAvgServer):
 
         for client in chosen_clients:
             client.update()
-
             ternarized_client_update, update_size = client.get_ternarized_update()
             client_updates.append(ternarized_client_update)
             self.received_size += update_size
 
         update_mean = get_tensors_by_function(client_updates, lambda xs: torch.mean(torch.stack(xs, dim=0), dim=0))
-        new_global_model = get_tensors_by_function([update_mean, self.global_model], lambda xy: xy[0] + xy[1])
+
+        update_full = get_tensors_by_function([update_mean, self.unsent_values], lambda xy: xy[0] + xy[1])
+        compressed_update, update_size = self.options.quantizer.quantize_tensor_list(update_full)
+        self.unsent_values = get_tensors_by_function([update_full, compressed_update], lambda xy: xy[0] - xy[1])
+        new_global_model = get_tensors_by_function([compressed_update, self.global_model], lambda xy: xy[0] + xy[1])
         set_tensors(self.global_model, new_global_model)
 
-        update_full = get_tensors_by_function([new_global_model, self.sent_values], lambda xy: xy[0] - xy[1])
-        # print(f"Update_full[0] std: {torch.std(update_full[0]).item():6f}")
 
-        update_send_to_client, update_size = self.options.ternarize(update_full)
-        for client in self.clients:
-            # diff = get_tensors_by_function([self.sent_values, client.local_model], lambda xy: torch.std(xy[0] - xy[1]))
-            # print(f"Diff[0] std: {diff[0].item():6f}")
-
-            client.set_ternarized_update(update_send_to_client)
-
+        for i, client in enumerate(self.clients):
+            if i == 0 or not GlobalConfig.fast_mode:
+                client.set_ternarized_update(compressed_update)
             self.sended_size += update_size
 
-        self.sent_values = get_tensors_by_function([update_send_to_client, self.sent_values],
-                                                   lambda xy: xy[0] + xy[1])
+
 
         self.current_global_batch += 1
         if self.current_global_batch == n_batches_per_epoch:
@@ -143,6 +147,6 @@ class STCServer(FedAvgServer):
 
 if __name__ == '__main__':
     a = torch.normal(0, 1, [1000])
-    ternarized_a, compressed_size = STC(0.01).ternarize(a)
+    ternarized_a, compressed_size = STC(0.01).quantize(a)
     print(compressed_size)
     print(ternarized_a)

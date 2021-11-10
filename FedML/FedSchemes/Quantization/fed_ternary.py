@@ -5,7 +5,7 @@ from typing import Union, Callable, List, Tuple, Any
 from dataclasses import dataclass
 
 from FedML.FedSchemes.fedavg import FedAvgServer, FedAvgServerOptions
-from FedML.FedSchemes.Quantization.ternary_weight_network import BaseTernary
+from FedML.FedSchemes.Quantization.ternary_weight_network import BaseQuantization
 from FedML.Base.Utils import get_tensors, set_tensors, get_tensors_by_function, count_parameters
 from FedML.Models.SpecialModels.trainable_ternarize_models import TrainableTernarizedModel
 
@@ -16,11 +16,11 @@ class FedTernServerOptions(FedAvgServerOptions):
     ternarize_server: Callable[[Any], Tuple[List[torch.Tensor], float]]
 
 
-class TrainableTernary(BaseTernary):
+class TrainableTernary(BaseQuantization):
     """
     From paper 'Ternary Compression for Communication-Efficient Federated Learning'
     """
-    def ternarize(self, x: torch.Tensor):
+    def quantize(self, x: torch.Tensor):
         delta = 0.05 * torch.max(torch.abs(x))
         alpha_pos = torch.sum(x[torch.greater(x, delta)]) / torch.sum(torch.greater(x, delta))
         alpha_neg = torch.sum(x[torch.greater(-x, delta)]) / torch.sum(torch.greater(-x, delta))
@@ -30,7 +30,7 @@ class TrainableTernary(BaseTernary):
         return ternary_x
 
     def global_ternarize(self, tensors: Union[List[torch.Tensor]], excluded_indices: List[int] = None):
-        return self.ternarize_tensor_list(tensors, excluded_indices)
+        return self.quantize_tensor_list(tensors, excluded_indices)
 
     def local_ternarize(self, m: TrainableTernarizedModel):
         return m.get_ternarized_values(), m.get_compression_rate()
