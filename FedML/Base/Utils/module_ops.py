@@ -31,25 +31,26 @@ def set_tensors(paras: Union[nn.Module, Iterable[nn.Parameter]], tensors: List[t
     return count_parameters(paras)
 
 
-def get_tensors_by_function(source_paras: List[Union[nn.Module, Iterable[nn.Parameter], List[torch.Tensor]]],
-                            func: Callable[[List[torch.Tensor]], torch.Tensor]):
-    for i, p in enumerate(source_paras):
-        if not isinstance(source_paras[i], List):
-            source_paras[i] = get_tensors(source_paras[i])
+def compute_tensors(func: Callable, *args):
+    return [func(*ts) for ts in zip(*args)]
+
+
+def compute_lists_of_tensors(input_tensors: List[Union[nn.Module, Iterable[nn.Parameter], List[torch.Tensor]]],
+                             func: Callable[[List[torch.Tensor]], torch.Tensor]):
+    for i, p in enumerate(input_tensors):
+        if not isinstance(input_tensors[i], List):
+            input_tensors[i] = get_tensors(input_tensors[i])
 
     result_tensors = []
-    for tensors in zip(*source_paras):
+    for tensors in zip(*input_tensors):
         result_tensors.append(func(list(tensors)))
     return result_tensors
 
 
-def copy_paras(source_para: Union[Iterable[nn.Parameter], nn.Module],
-               target_para: Union[Iterable[nn.Parameter], nn.Module]):
-    return set_tensors(target_para, get_tensors(source_para, copy=True))
+def mean_tensors(input_tensors):
+    return compute_lists_of_tensors(input_tensors, lambda xs: torch.mean(torch.stack(xs, dim=0), dim=0))
 
 
-# Copy parameters mean from multiple sources to target
-def set_mean_paras(source_paras: List[Union[Iterable[nn.Parameter], nn.Module, List[torch.Tensor]]],
-                   target_para: Union[Iterable[nn.Parameter], nn.Module]):
-    mean_tensor = get_tensors_by_function(source_paras, lambda xs: torch.mean(torch.stack(xs), dim=0))
-    return set_tensors(target_para, mean_tensor)
+if __name__ == '__main__':
+    x = mean_tensors([[torch.tensor(1.), torch.tensor(2.)], [torch.tensor(3.),  torch.tensor(4.)]])
+    print(x)

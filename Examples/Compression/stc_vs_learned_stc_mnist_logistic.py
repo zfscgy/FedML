@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from FedML.Models.simple_models import MnistLogistic
 from FedML.Base.Utils import get_tensors
 from FedML.FedSchemes.fedavg import *
-from FedML.FedSchemes.Quantization.sparse_ternary_compression import STC, STCClientOptions, STCClient, \
+from FedML.FedSchemes.Compression.sparse_ternary_compression import STC, STCClientOptions, STCClient, \
     STCServerOptions, STCServer
 from FedML.FedSchemes.Experimental.learned_stc import LearnedSTCClientOptions, LearnedSTCClient
 from FedML.Data.datasets import Mnist

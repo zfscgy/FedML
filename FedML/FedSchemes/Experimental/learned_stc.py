@@ -6,12 +6,14 @@ from torch.utils.data import DataLoader
 from typing import Union, Callable, List
 from dataclasses import dataclass
 
-from FedML.Base.Utils import get_tensors_by_function, get_tensors, set_tensors, \
+from FedML.Base.Utils import get_tensors, set_tensors, \
+    compute_lists_of_tensors,  compute_tensors, \
     count_parameters, test_on_data_loader, Convert
 from FedML.Base.config import GlobalConfig
 from FedML.FedSchemes.fedavg import FedAvgServer, FedAvgClient
-from FedML.FedSchemes.Quantization.sparse_ternary_compression import STCClient, STCClientOptions, \
-    STCServerOptions, STCServer
+from FedML.FedSchemes.Compression.base_compressor import BaseCompressor, \
+    BaseCompressionClientOptions, BaseCompressionServerOptions
+from FedML.FedSchemes.Compression.sparse_ternary_compression import STCClient, STCServer
 
 
 
@@ -33,7 +35,7 @@ class SmoothL1(nn.Module):
 
 
 @dataclass
-class LearnedSTCServerOptions(STCServerOptions):
+class LearnedSTCServerOptions(BaseCompressionServerOptions):
     residual_shrinkage: float
     dynamic_shrinkage: bool
     ref_data_loader: DataLoader
@@ -46,8 +48,8 @@ class LearnedSTCServer(STCServer):
         self.last_val_metric = None
 
     def update(self):
-        self.unsent_values = get_tensors_by_function([self.unsent_values], lambda x: (1 - self.options.residual_shrinkage) * x[0])
-
+        # Shrink the residual
+        self.residual_model = compute_tensors(lambda x: (1 - self.options.residual_shrinkage) * x, self.residual_model)
         super(LearnedSTCServer, self).update()
         if self.options.dynamic_shrinkage:
             val_metric = test_on_data_loader(self.global_model, self.options.ref_data_loader,
@@ -65,37 +67,32 @@ class LearnedSTCServer(STCServer):
 
 
 @dataclass
-class LearnedSTCClientOptions(STCClientOptions):
+class LearnedSTCClientOptions(BaseCompressionClientOptions):
     residual_shrinkage: float
     lambda_l1: float
     smooth_l1: float
     dynamic_l1: bool
 
 
-
-
 class LearnedSTCClient(STCClient):
-    def __init__(self, get_model: Callable[[], nn.Module], server: FedAvgServer, options: LearnedSTCClientOptions):
+    def __init__(self, get_model: Callable[[], nn.Module], server: LearnedSTCServer, options: LearnedSTCClientOptions):
         super(LearnedSTCClient, self).__init__(get_model, server, options)
         self.options.base_loss = self.options.loss_func
         self.options.base_lambda_l1 = self.options.lambda_l1
 
         self.loss_diff_records = []
 
-
     def update(self):
         # Save previous model
-        self.unsent_updates = get_tensors_by_function(
-            [self.unsent_updates], lambda xs: xs[0] * self.options.residual_shrinkage)
-
+        self.residual_model = compute_tensors(lambda x: x * self.options.residual_shrinkage, self.residual_model)
         previous_model = get_tensors(self.local_model, copy=True)
+        previous_model_sub_residual = compute_lists_of_tensors(
+            [previous_model, self.residual_model], lambda xs: xs[0] - xs[1])
 
-        previous_model_sub_unsent = get_tensors_by_function(
-            [previous_model, self.unsent_updates], lambda xs: xs[0] - xs[1])
         if not self.options.smooth_l1:
             self.options.loss_func = lambda pred_ys, ys: \
                 self.options.base_loss(pred_ys, ys) + \
-                self.options.lambda_l1 * l1_dist(self.local_model, [Convert.to_tensor(t) for t in previous_model_sub_unsent])
+                self.options.lambda_l1 * l1_dist(self.local_model, [Convert.to_tensor(t) for t in previous_model_sub_residual])
         else:
             # Calculate smooth thresholds
             xs, ys = next(iter(self.options.client_data_loader))
@@ -128,10 +125,9 @@ class LearnedSTCClient(STCClient):
         self.loss_diff_records.append(loss_diff)
 
         print(f"Train losses (first/last 10): {np.mean(losses[:10]):.6f} {np.mean(losses[-10:]):.6f}")
-        self.current_update = get_tensors_by_function([self.local_model, previous_model], lambda xy: xy[0] - xy[1])
+        self.current_update = compute_tensors(torch.sub, self.local_model, previous_model)
         # Restore previous model
         set_tensors(self.local_model, previous_model)
-
 
         if self.options.dynamic_l1:
             if len(self.loss_diff_records) > 1:
@@ -141,10 +137,5 @@ class LearnedSTCClient(STCClient):
                 self.options.lambda_l1 = lambda_l1
 
         return losses
-
-
-    def get_ternarized_update(self):
-        # print(f"Client unsent: {torch.std(self.unsent_updates[0]).item():.6f}")
-        return super(LearnedSTCClient, self).get_ternarized_update()
 
 

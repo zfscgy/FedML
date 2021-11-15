@@ -1,13 +1,13 @@
 import numpy as np
 import torch
-from FedML.FedSchemes.Quantization.ternary_weight_network import BaseQuantization
+from FedML.FedSchemes.Compression.base_compressor import BaseCompressor
 
 
-class TernGrad(BaseQuantization):
+class TernGrad(BaseCompressor):
     """
     From paper 'Terngrad'
     """
-    def quantize(self, x: torch.Tensor):
+    def compress(self, x: torch.Tensor):
         """
         Probabilistically set tensor to -1, 0, +1
 
@@ -22,4 +22,4 @@ class TernGrad(BaseQuantization):
 
 
 if __name__ == '__main__':
-    print(TernGrad().quantize(torch.normal(0, 1, [10])))
+    print(TernGrad().compress(torch.normal(0, 1, [10])))

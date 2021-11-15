@@ -1,21 +1,21 @@
 """
- This code mainly uses the method described in Ternary Weight Networks for ternary quantization
- Server -> Clients: Weight ternarization
- Clients -> Server: Gradient ternarization
+ This code mainly uses the method described in TernGrad
 """
 
 
-import numpy as np
+from typing import List
+
 import torch
-from torch import nn
-from torch.optim import Adam, SGD
-from torch.utils.data import Dataset, TensorDataset, DataLoader
+from torch.optim import Adam
+from torch.utils.data import TensorDataset
 from FedML.Models import LeNet5
 from FedML.FedSchemes.fedavg import *
-from FedML.FedSchemes.Quantization.ternary_weight_network import TernaryServerOptions, TernaryServer_GradientAvg, NaiveTernary
+from FedML.FedSchemes.Compression.ternary_weight_network import TernaryServerOptions, TernaryServer_GradientAvg
+from FedML.FedSchemes.Compression.terngrad import TernGrad
 from FedML.Data.datasets import Mnist
-from FedML.Data.distribute_data import get_iid_mnist, get_non_iid_mnist
+from FedML.Data.distribute_data import get_iid_mnist
 from FedML.Train import FedTrain
+from FedML.Base.Utils import compute_lists_of_tensors
 
 
 """
@@ -41,12 +41,17 @@ iid_mnist_datasets = get_iid_mnist(np.concatenate([mnist_train.data.view(-1, 784
                                    samples_per_client)
 
 
+def terngrad_ternarize(x: List[torch.Tensor]):
+    ternarized, compression_rate = TernGrad().quantize_tensor_list(x)
+    return [t * 0.01 for t in ternarized], compression_rate
+
+
 server = TernaryServer_GradientAvg(
     lambda: LeNet5(),
     TernaryServerOptions(
         n_clients_per_round=10,
-        ternarize_server=lambda x: NaiveTernary().quantize_tensor_list(x, [len(x) - 2, len(x) - 1]),
-        ternarize_client=lambda x: NaiveTernary().quantize_tensor_list(x, [len(x) - 2, len(x) - 1])
+        ternarize_server=lambda x: (x, 1.),
+        ternarize_client=terngrad_ternarize
     )
 )
 
